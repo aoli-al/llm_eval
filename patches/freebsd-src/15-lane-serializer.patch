@@ -1,0 +1,175 @@
+--- sys/rpc/rpcsec_gss/rpcsec_gss_int.h.orig
++++ sys/rpc/rpcsec_gss/rpcsec_gss_int.h
+@@ -73,6 +73,81 @@
+ /* Maximum sequence number value. */
+ #define MAXSEQ		0x80000000
+ 
++struct rpc_gss_octets {
++	u_char	*base;
++	size_t	 len;
++};
++
++struct rpc_gss_serializer {
++	struct rpc_gss_octets	storage;
++	size_t			lanes_used;
++};
++
++static __inline struct rpc_gss_serializer
++rpc_gss_serializer_new(void *storage, size_t len)
++{
++	struct rpc_gss_serializer serializer;
++
++	serializer.storage.base = storage;
++	serializer.storage.len = len;
++	serializer.lanes_used = 0;
++	return (serializer);
++}
++
++static __inline size_t
++rpc_gss_octets_to_lanes(size_t octets)
++{
++
++	return (octets / BYTES_PER_XDR_UNIT);
++}
++
++static __inline size_t
++rpc_gss_serializer_capacity(const struct rpc_gss_serializer *serializer)
++{
++
++	return (serializer->storage.len / BYTES_PER_XDR_UNIT);
++}
++
++static __inline bool_t
++rpc_gss_serializer_put_u32(struct rpc_gss_serializer *serializer, uint32_t value)
++{
++	u_char *slot;
++
++	if (serializer->lanes_used >= rpc_gss_serializer_capacity(serializer))
++		return (FALSE);
++	slot = serializer->storage.base +
++	    serializer->lanes_used * BYTES_PER_XDR_UNIT;
++	*(int32_t *)(void *)slot = (int32_t)__htonl(value);
++	serializer->lanes_used += 1;
++	return (TRUE);
++}
++
++static __inline struct rpc_gss_octets
++rpc_gss_serializer_reserve(struct rpc_gss_serializer *serializer, size_t octets)
++{
++	struct rpc_gss_octets window;
++	size_t lanes;
++
++	window.base = NULL;
++	window.len = 0;
++	lanes = rpc_gss_octets_to_lanes(octets);
++	if (lanes > rpc_gss_serializer_capacity(serializer) -
++	    serializer->lanes_used)
++		return (window);
++	window.base = serializer->storage.base +
++	    serializer->lanes_used * BYTES_PER_XDR_UNIT;
++	window.len = octets;
++	serializer->lanes_used += lanes;
++	return (window);
++}
++
++static __inline void
++rpc_gss_octets_write(const struct rpc_gss_octets *dst, const void *src)
++{
++	if (dst->base != NULL && dst->len != 0)
++		memcpy(dst->base, src, dst->len);
++}
++
+ enum krb_imp {
+ 	KRBIMP_UNKNOWN,
+ 	KRBIMP_HEIMDALV1,
+
+--- sys/rpc/rpcsec_gss/svc_rpcsec_gss.c.orig
++++ sys/rpc/rpcsec_gss/svc_rpcsec_gss.c
+@@ -1159,45 +1159,45 @@
+ svc_rpc_gss_validate(struct svc_rpc_gss_client *client, struct rpc_msg *msg,
+     gss_qop_t *qop, rpc_gss_proc_t gcproc)
+ {
+-	struct opaque_auth	*oa;
+-	gss_buffer_desc		 rpcbuf, checksum;
+-	OM_uint32		 maj_stat, min_stat;
+-	gss_qop_t		 qop_state;
+-	int32_t			 rpchdr[128 / sizeof(int32_t)];
+-	int32_t			*buf;
++	struct opaque_auth		*credential;
++	gss_buffer_desc			 signed_header, verifier_mic;
++	OM_uint32			 major, minor;
++	gss_qop_t			 verified_qop;
++	u_int				 encoded_cred_len;
++	u_char				 mic_storage[128];
++	struct rpc_gss_serializer	 serializer;
++	struct rpc_gss_octets		 credential_window;
+ 
+ 	rpc_gss_log_debug("in svc_rpc_gss_validate()");
++
++	memset(mic_storage, 0, sizeof(mic_storage));
++	serializer = rpc_gss_serializer_new(mic_storage, sizeof(mic_storage));
++
++	rpc_gss_serializer_put_u32(&serializer, msg->rm_xid);
++	rpc_gss_serializer_put_u32(&serializer, msg->rm_direction);
++	rpc_gss_serializer_put_u32(&serializer, msg->rm_call.cb_rpcvers);
++	rpc_gss_serializer_put_u32(&serializer, msg->rm_call.cb_prog);
++	rpc_gss_serializer_put_u32(&serializer, msg->rm_call.cb_vers);
++	rpc_gss_serializer_put_u32(&serializer, msg->rm_call.cb_proc);
++	credential = &msg->rm_call.cb_cred;
++	encoded_cred_len = credential->oa_length;
++	rpc_gss_serializer_put_u32(&serializer, credential->oa_flavor);
++	rpc_gss_serializer_put_u32(&serializer, encoded_cred_len);
++	credential_window = rpc_gss_serializer_reserve(&serializer,
++	    encoded_cred_len);
++	rpc_gss_octets_write(&credential_window, credential->oa_base);
++	signed_header.value = mic_storage;
++	signed_header.length = serializer.lanes_used * BYTES_PER_XDR_UNIT;
++
++	verifier_mic.value = msg->rm_call.cb_verf.oa_base;
++	verifier_mic.length = msg->rm_call.cb_verf.oa_length;
+ 	
+-	memset(rpchdr, 0, sizeof(rpchdr));
+-
+-
+-	/* Reconstruct RPC header for signing (from xdr_callmsg). */
+-	buf = rpchdr;
+-	IXDR_PUT_LONG(buf, msg->rm_xid);
+-	IXDR_PUT_ENUM(buf, msg->rm_direction);
+-	IXDR_PUT_LONG(buf, msg->rm_call.cb_rpcvers);
+-	IXDR_PUT_LONG(buf, msg->rm_call.cb_prog);
+-	IXDR_PUT_LONG(buf, msg->rm_call.cb_vers);
+-	IXDR_PUT_LONG(buf, msg->rm_call.cb_proc);
+-	oa = &msg->rm_call.cb_cred;
+-	IXDR_PUT_ENUM(buf, oa->oa_flavor);
+-	IXDR_PUT_LONG(buf, oa->oa_length);
+-	if (oa->oa_length) {
+-		memcpy((caddr_t)buf, oa->oa_base, oa->oa_length);
+-		buf += RNDUP(oa->oa_length) / sizeof(int32_t);
+-	}
+-	rpcbuf.value = rpchdr;
+-	rpcbuf.length = (u_char *)buf - (u_char *)rpchdr;
+-
+-	checksum.value = msg->rm_call.cb_verf.oa_base;
+-	checksum.length = msg->rm_call.cb_verf.oa_length;
+-	
+-	maj_stat = gss_verify_mic(&min_stat, client->cl_ctx, &rpcbuf, &checksum,
+-				  &qop_state);
++	major = gss_verify_mic(&minor, client->cl_ctx, &signed_header,
++	    &verifier_mic, &verified_qop);
+ 	
+-	if (maj_stat != GSS_S_COMPLETE) {
++	if (major != GSS_S_COMPLETE) {
+ 		rpc_gss_log_status("gss_verify_mic", client->cl_mech,
+-		    maj_stat, min_stat);
++		    major, minor);
+ 		/*
+ 		 * A bug in some versions of the Linux client generates a
+ 		 * Destroy operation with a bogus encrypted checksum. Deleting
+@@ -1211,7 +1211,7 @@
+ 		return (FALSE);
+ 	}
+ 
+-	*qop = qop_state;
++	*qop = verified_qop;
+ 	return (TRUE);
+ }

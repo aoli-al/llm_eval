@@ -1,0 +1,163 @@
+--- sys/rpc/rpcsec_gss/rpcsec_gss_int.h.orig
++++ sys/rpc/rpcsec_gss/rpcsec_gss_int.h
+@@ -73,6 +73,69 @@
+ /* Maximum sequence number value. */
+ #define MAXSEQ		0x80000000
+ 
++struct rpc_gss_span {
++	u_char	*data;
++	size_t	 len;
++};
++
++struct rpc_gss_mic_writer {
++	struct rpc_gss_span	frame;
++	size_t			written;
++};
++
++static __inline struct rpc_gss_mic_writer
++rpc_gss_mic_writer_new(void *storage, size_t len)
++{
++	struct rpc_gss_mic_writer writer;
++
++	writer.frame.data = storage;
++	writer.frame.len = len;
++	writer.written = 0;
++	return (writer);
++}
++
++static __inline size_t
++rpc_gss_mic_writer_remaining(const struct rpc_gss_mic_writer *writer)
++{
++
++	return (writer->frame.len - writer->written);
++}
++
++static __inline bool_t
++rpc_gss_mic_writer_push_u32(struct rpc_gss_mic_writer *writer, uint32_t value)
++{
++	u_char *slot;
++
++	if (BYTES_PER_XDR_UNIT > rpc_gss_mic_writer_remaining(writer))
++		return (FALSE);
++	slot = writer->frame.data + writer->written * BYTES_PER_XDR_UNIT;
++	*(int32_t *)(void *)slot = (int32_t)__htonl(value);
++	writer->written += 1;
++	return (TRUE);
++}
++
++static __inline struct rpc_gss_span
++rpc_gss_mic_writer_take_bytes(struct rpc_gss_mic_writer *writer, size_t len)
++{
++	struct rpc_gss_span view;
++
++	view.data = NULL;
++	view.len = 0;
++	if (len == 0 || len > rpc_gss_mic_writer_remaining(writer))
++		return (view);
++	view.data = writer->frame.data + writer->written * BYTES_PER_XDR_UNIT;
++	view.len = len;
++	writer->written += RNDUP(len) / BYTES_PER_XDR_UNIT;
++	return (view);
++}
++
++static __inline void
++rpc_gss_span_write(const struct rpc_gss_span *dst, const void *src)
++{
++	if (dst->data != NULL && dst->len != 0)
++		memcpy(dst->data, src, dst->len);
++}
++
+ enum krb_imp {
+ 	KRBIMP_UNKNOWN,
+ 	KRBIMP_HEIMDALV1,
+
+--- sys/rpc/rpcsec_gss/svc_rpcsec_gss.c.orig
++++ sys/rpc/rpcsec_gss/svc_rpcsec_gss.c
+@@ -1159,45 +1159,45 @@
+ svc_rpc_gss_validate(struct svc_rpc_gss_client *client, struct rpc_msg *msg,
+     gss_qop_t *qop, rpc_gss_proc_t gcproc)
+ {
+-	struct opaque_auth	*oa;
+-	gss_buffer_desc		 rpcbuf, checksum;
+-	OM_uint32		 maj_stat, min_stat;
+-	gss_qop_t		 qop_state;
+-	int32_t			 rpchdr[128 / sizeof(int32_t)];
+-	int32_t			*buf;
++	struct opaque_auth		*credential;
++	gss_buffer_desc			 signed_header, verifier_mic;
++	OM_uint32			 major, minor;
++	gss_qop_t			 verified_qop;
++	u_int				 encoded_cred_len;
++	u_char				 mic_storage[128];
++	struct rpc_gss_mic_writer	 mic_writer;
++	struct rpc_gss_span		 credential_region;
+ 
+ 	rpc_gss_log_debug("in svc_rpc_gss_validate()");
++
++	memset(mic_storage, 0, sizeof(mic_storage));
++	mic_writer = rpc_gss_mic_writer_new(mic_storage, sizeof(mic_storage));
++
++	rpc_gss_mic_writer_push_u32(&mic_writer, msg->rm_xid);
++	rpc_gss_mic_writer_push_u32(&mic_writer, msg->rm_direction);
++	rpc_gss_mic_writer_push_u32(&mic_writer, msg->rm_call.cb_rpcvers);
++	rpc_gss_mic_writer_push_u32(&mic_writer, msg->rm_call.cb_prog);
++	rpc_gss_mic_writer_push_u32(&mic_writer, msg->rm_call.cb_vers);
++	rpc_gss_mic_writer_push_u32(&mic_writer, msg->rm_call.cb_proc);
++	credential = &msg->rm_call.cb_cred;
++	encoded_cred_len = credential->oa_length;
++	rpc_gss_mic_writer_push_u32(&mic_writer, credential->oa_flavor);
++	rpc_gss_mic_writer_push_u32(&mic_writer, encoded_cred_len);
++	credential_region = rpc_gss_mic_writer_take_bytes(&mic_writer,
++	    encoded_cred_len);
++	rpc_gss_span_write(&credential_region, credential->oa_base);
++	signed_header.value = mic_storage;
++	signed_header.length = mic_writer.written * BYTES_PER_XDR_UNIT;
++
++	verifier_mic.value = msg->rm_call.cb_verf.oa_base;
++	verifier_mic.length = msg->rm_call.cb_verf.oa_length;
+ 	
+-	memset(rpchdr, 0, sizeof(rpchdr));
+-
+-
+-	/* Reconstruct RPC header for signing (from xdr_callmsg). */
+-	buf = rpchdr;
+-	IXDR_PUT_LONG(buf, msg->rm_xid);
+-	IXDR_PUT_ENUM(buf, msg->rm_direction);
+-	IXDR_PUT_LONG(buf, msg->rm_call.cb_rpcvers);
+-	IXDR_PUT_LONG(buf, msg->rm_call.cb_prog);
+-	IXDR_PUT_LONG(buf, msg->rm_call.cb_vers);
+-	IXDR_PUT_LONG(buf, msg->rm_call.cb_proc);
+-	oa = &msg->rm_call.cb_cred;
+-	IXDR_PUT_ENUM(buf, oa->oa_flavor);
+-	IXDR_PUT_LONG(buf, oa->oa_length);
+-	if (oa->oa_length) {
+-		memcpy((caddr_t)buf, oa->oa_base, oa->oa_length);
+-		buf += RNDUP(oa->oa_length) / sizeof(int32_t);
+-	}
+-	rpcbuf.value = rpchdr;
+-	rpcbuf.length = (u_char *)buf - (u_char *)rpchdr;
+-
+-	checksum.value = msg->rm_call.cb_verf.oa_base;
+-	checksum.length = msg->rm_call.cb_verf.oa_length;
+-	
+-	maj_stat = gss_verify_mic(&min_stat, client->cl_ctx, &rpcbuf, &checksum,
+-				  &qop_state);
++	major = gss_verify_mic(&minor, client->cl_ctx, &signed_header,
++	    &verifier_mic, &verified_qop);
+ 	
+-	if (maj_stat != GSS_S_COMPLETE) {
++	if (major != GSS_S_COMPLETE) {
+ 		rpc_gss_log_status("gss_verify_mic", client->cl_mech,
+-		    maj_stat, min_stat);
++		    major, minor);
+ 		/*
+ 		 * A bug in some versions of the Linux client generates a
+ 		 * Destroy operation with a bogus encrypted checksum. Deleting
+@@ -1211,7 +1211,7 @@
+ 		return (FALSE);
+ 	}
+ 
+-	*qop = qop_state;
++	*qop = verified_qop;
+ 	return (TRUE);
+ }

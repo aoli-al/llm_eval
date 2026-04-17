@@ -13,7 +13,7 @@ benchmarks:
     project_name: FreeBSD
     prompt_template: prompts/security_audit.md
     patches:
-      - patches/freebsd-src/13-structure-mic-frame.patch
+      - patches/freebsd-src/17-borrowed-view-runtime.patch
     evaluation:
       positive_indicators:
         - buffer overflow

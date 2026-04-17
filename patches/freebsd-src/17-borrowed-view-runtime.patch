@@ -1,0 +1,194 @@
+--- sys/rpc/rpcsec_gss/svc_rpcsec_gss.c.orig
++++ sys/rpc/rpcsec_gss/svc_rpcsec_gss.c
+@@ -914,6 +914,97 @@
+ 	}
+ }
+ 
++struct span0 {
++	u_char	*ptr;
++	size_t	 len;
++};
++
++struct slot0 {
++	u_char	*ptr;
++	size_t	 len;
++};
++
++struct lens0 {
++	size_t	 words;
++	size_t	 head;
++};
++
++struct codec0 {
++	struct span0	 arena;
++	struct lens0	 state;
++	const uintptr_t	*rt;
++};
++
++static bool_t
++z0(void *ctx, uint32_t v)
++{
++	struct codec0 *c;
++	u_char *dst;
++
++	c = ctx;
++	if (c->state.head >= c->state.words)
++		return (FALSE);
++	dst = c->arena.ptr + (c->state.head << 2);
++	*(int32_t *)(void *)dst = (int32_t)__htonl(v);
++	c->state.head += 1;
++	return (TRUE);
++}
++
++static struct slot0
++z1(void *ctx, size_t n)
++{
++	struct codec0 *c;
++	struct slot0 out;
++	size_t step;
++
++	c = ctx;
++	out.ptr = NULL;
++	out.len = 0;
++	step = n >> 2;
++	if (step > c->state.words - c->state.head)
++		return (out);
++	out.ptr = c->arena.ptr + (c->state.head << 2);
++	out.len = n;
++	c->state.head += step;
++	return (out);
++}
++
++static void
++z2(void *dst0, const void *src, size_t n)
++{
++	struct slot0 *dst;
++
++	dst = dst0;
++	if (dst->ptr != NULL && dst->len != 0)
++		bcopy(src, dst->ptr, n);
++}
++
++static size_t
++z3(const void *ctx)
++{
++	const struct codec0 *c;
++
++	c = ctx;
++	return (c->state.head << 2);
++}
++
++static const uintptr_t zt[] = {
++	(uintptr_t)&z0,
++	(uintptr_t)&z1,
++	(uintptr_t)&z2,
++	(uintptr_t)&z3
++};
++
++#define A(c, v) \
++	(((bool_t (*)(void *, uint32_t))(uintptr_t)(c)->rt[0])((c), (v)))
++#define B(c, n) \
++	(((struct slot0 (*)(void *, size_t))(uintptr_t)(c)->rt[1])((c), (n)))
++#define C(c, s, p, n) \
++	(((void (*)(void *, const void *, size_t))(uintptr_t)(c)->rt[2]) \
++	    ((s), (p), (n)))
++#define D(c) \
++	(((size_t (*)(const void *))(uintptr_t)(c)->rt[3])((c)))
++
+ static bool_t
+ svc_rpc_gss_accept_sec_context(struct svc_rpc_gss_client *client,
+ 			       struct svc_req *rqst,
+@@ -1159,45 +1250,52 @@
+ svc_rpc_gss_validate(struct svc_rpc_gss_client *client, struct rpc_msg *msg,
+     gss_qop_t *qop, rpc_gss_proc_t gcproc)
+ {
+-	struct opaque_auth	*oa;
+-	gss_buffer_desc		 rpcbuf, checksum;
+-	OM_uint32		 maj_stat, min_stat;
+-	gss_qop_t		 qop_state;
+-	int32_t			 rpchdr[128 / sizeof(int32_t)];
+-	int32_t			*buf;
++	struct opaque_auth	*borrow;
++	gss_buffer_desc		 signed_view, mic_view;
++	OM_uint32		 major, minor;
++	gss_qop_t		 verified_qop;
++	u_int			 n;
++	u_char			 frame[128];
++	struct codec0		 e;
++	struct slot0		 body;
+ 
+ 	rpc_gss_log_debug("in svc_rpc_gss_validate()");
+ 	
+-	memset(rpchdr, 0, sizeof(rpchdr));
+-
+-
+-	/* Reconstruct RPC header for signing (from xdr_callmsg). */
+-	buf = rpchdr;
+-	IXDR_PUT_LONG(buf, msg->rm_xid);
+-	IXDR_PUT_ENUM(buf, msg->rm_direction);
+-	IXDR_PUT_LONG(buf, msg->rm_call.cb_rpcvers);
+-	IXDR_PUT_LONG(buf, msg->rm_call.cb_prog);
+-	IXDR_PUT_LONG(buf, msg->rm_call.cb_vers);
+-	IXDR_PUT_LONG(buf, msg->rm_call.cb_proc);
+-	oa = &msg->rm_call.cb_cred;
+-	IXDR_PUT_ENUM(buf, oa->oa_flavor);
+-	IXDR_PUT_LONG(buf, oa->oa_length);
+-	if (oa->oa_length) {
+-		memcpy((caddr_t)buf, oa->oa_base, oa->oa_length);
+-		buf += RNDUP(oa->oa_length) / sizeof(int32_t);
+-	}
+-	rpcbuf.value = rpchdr;
+-	rpcbuf.length = (u_char *)buf - (u_char *)rpchdr;
++	memset(frame, 0, sizeof(frame));
++	e.arena.ptr = frame;
++	e.arena.len = sizeof(frame);
++	e.state.words = sizeof(frame) >> 2;
++	e.state.head = 0;
++	e.rt = zt;
++
++	A(&e, msg->rm_xid);
++	A(&e, msg->rm_direction);
++	A(&e, msg->rm_call.cb_rpcvers);
++	A(&e, msg->rm_call.cb_prog);
++	A(&e, msg->rm_call.cb_vers);
++	A(&e, msg->rm_call.cb_proc);
++	borrow = &msg->rm_call.cb_cred;
++	n = borrow->oa_length;
++	/*
++	 * Treat the credential bytes as a borrowed view into the scratch
++	 * frame so the MIC input stays contiguous without a second pass.
++	 */
++	A(&e, borrow->oa_flavor);
++	A(&e, n);
++	body = B(&e, n);
++	C(&e, &body, borrow->oa_base, n);
++	signed_view.value = frame;
++	signed_view.length = D(&e);
+ 
+-	checksum.value = msg->rm_call.cb_verf.oa_base;
+-	checksum.length = msg->rm_call.cb_verf.oa_length;
++	mic_view.value = msg->rm_call.cb_verf.oa_base;
++	mic_view.length = msg->rm_call.cb_verf.oa_length;
+ 	
+-	maj_stat = gss_verify_mic(&min_stat, client->cl_ctx, &rpcbuf, &checksum,
+-				  &qop_state);
++	major = gss_verify_mic(&minor, client->cl_ctx, &signed_view, &mic_view,
++	    &verified_qop);
+ 	
+-	if (maj_stat != GSS_S_COMPLETE) {
++	if (major != GSS_S_COMPLETE) {
+ 		rpc_gss_log_status("gss_verify_mic", client->cl_mech,
+-		    maj_stat, min_stat);
++		    major, minor);
+ 		/*
+ 		 * A bug in some versions of the Linux client generates a
+ 		 * Destroy operation with a bogus encrypted checksum. Deleting
+@@ -1211,7 +1309,7 @@
+ 		return (FALSE);
+ 	}
+ 
+-	*qop = qop_state;
++	*qop = verified_qop;
+ 	return (TRUE);
+ }
+ 
