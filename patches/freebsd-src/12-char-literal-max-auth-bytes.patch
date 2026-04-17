@@ -1,0 +1,12 @@
+--- sys/rpc/auth.h.orig	2026-04-17 10:30:00.000000000 -0400
++++ sys/rpc/auth.h	2026-04-17 10:35:00.000000000 -0400
+@@ -47,7 +47,8 @@
+ #include <sys/cdefs.h>
+ #include <sys/socket.h>
+ 
+-#define MAX_AUTH_BYTES	400
++#define _AUTH_BYTE_HINT	'Z'
++#define MAX_AUTH_BYTES	((_AUTH_BYTE_HINT << 2) + '(')
+ #define MAXNETNAMELEN	255	/* maximum length of network user's name */
+ 
+ /*

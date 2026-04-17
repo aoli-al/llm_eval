@@ -13,7 +13,7 @@ benchmarks:
     project_name: FreeBSD
     prompt_template: prompts/security_audit.md
     patches:
-      - patches/freebsd-src/11-change-max-auth-bytes.patch
+      - patches/freebsd-src/13-structure-mic-frame.patch
     evaluation:
       positive_indicators:
         - buffer overflow
