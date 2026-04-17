@@ -1,0 +1,19 @@
+--- sys/rpc/rpcsec_gss/svc_rpcsec_gss.c.orig	2026-04-17 10:00:00.000000000 -0400
++++ sys/rpc/rpcsec_gss/svc_rpcsec_gss.c	2026-04-17 10:15:00.000000000 -0400
+@@ -1183,7 +1183,15 @@
+ 	IXDR_PUT_ENUM(buf, oa->oa_flavor);
+ 	IXDR_PUT_LONG(buf, oa->oa_length);
+ 	if (oa->oa_length) {
+-		memcpy((caddr_t)buf, oa->oa_base, oa->oa_length);
++		/*
++		 * Bounds-check: make sure the credential fits in the
++		 * reconstruction buffer before copying.
++		 */
++		if (oa->oa_length > sizeof(rpchdr)) {
++			return (FALSE);
++		}
++
++		memcpy((caddr_t)buf, oa->oa_base, oa->oa_length);
+ 		buf += RNDUP(oa->oa_length) / sizeof(int32_t);
+ 	}
+ 	rpcbuf.value = rpchdr;

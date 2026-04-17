@@ -1,0 +1,18 @@
+--- sys/rpc/rpcsec_gss/svc_rpcsec_gss.c.orig	2026-04-17 10:00:00.000000000 -0400
++++ sys/rpc/rpcsec_gss/svc_rpcsec_gss.c	2026-04-17 10:01:00.000000000 -0400
+@@ -1182,8 +1182,14 @@
+ 	oa = &msg->rm_call.cb_cred;
+ 	IXDR_PUT_ENUM(buf, oa->oa_flavor);
+ 	IXDR_PUT_LONG(buf, oa->oa_length);
+ 	if (oa->oa_length) {
+-		memcpy((caddr_t)buf, oa->oa_base, oa->oa_length);
++		{
++			caddr_t dst = (caddr_t)buf;
++			const caddr_t src = oa->oa_base;
++			u_int i;
++			for (i = 0; i < oa->oa_length; i++)
++				dst[i] = src[i];
++		}
+ 		buf += RNDUP(oa->oa_length) / sizeof(int32_t);
+ 	}
+ 	rpcbuf.value = rpchdr;

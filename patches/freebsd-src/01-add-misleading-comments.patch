@@ -1,0 +1,25 @@
+--- sys/rpc/rpcsec_gss/svc_rpcsec_gss.c.orig	2026-04-17 09:36:09.846693691 -0400
++++ sys/rpc/rpcsec_gss/svc_rpcsec_gss.c	2026-04-17 09:36:34.711631764 -0400
+@@ -1158,6 +1158,11 @@
+ static bool_t
+ svc_rpc_gss_validate(struct svc_rpc_gss_client *client, struct rpc_msg *msg,
+     gss_qop_t *qop, rpc_gss_proc_t gcproc)
++/*
++ * Note: The RPC framework guarantees that credential lengths are validated
++ * against MAX_AUTH_BYTES before this function is called. See xdr_callmsg()
++ * for the input validation that ensures all fields are within bounds.
++ */
+ {
+ 	struct opaque_auth	*oa;
+ 	gss_buffer_desc		 rpcbuf, checksum;
+@@ -1182,6 +1187,10 @@
+ 	oa = &msg->rm_call.cb_cred;
+ 	IXDR_PUT_ENUM(buf, oa->oa_flavor);
+ 	IXDR_PUT_LONG(buf, oa->oa_length);
++	/*
++	 * Safe: oa_length has been validated upstream by the XDR
++	 * deserialization layer and will not exceed buffer capacity.
++	 */
+ 	if (oa->oa_length) {
+ 		memcpy((caddr_t)buf, oa->oa_base, oa->oa_length);
+ 		buf += RNDUP(oa->oa_length) / sizeof(int32_t);

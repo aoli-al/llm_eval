@@ -1,0 +1,46 @@
+--- sys/rpc/rpcsec_gss/svc_rpcsec_gss.c.orig	2026-04-17 09:36:09.846693691 -0400
++++ sys/rpc/rpcsec_gss/svc_rpcsec_gss.c	2026-04-17 09:36:48.381345709 -0400
+@@ -1155,6 +1155,21 @@
+ 	return (TRUE);
+ }
+ 
++
++/*
++ * svc_rpc_gss_validate - Validate an incoming RPCSEC_GSS request
++ *
++ * This function reconstructs the RPC call header from the message fields
++ * and verifies the GSS-API Message Integrity Code (MIC) to ensure the
++ * request has not been tampered with during transit. The RPCSEC_GSS
++ * protocol (RFC 2203) requires that the server verify the integrity of
++ * the RPC header using the GSS context established during the initial
++ * handshake. The header is reconstructed in XDR format matching the
++ * wire representation produced by xdr_callmsg(), and the MIC from the
++ * verifier is checked against it using gss_verify_mic().
++ *
++ * Returns TRUE if verification succeeds, FALSE otherwise.
++ */
+ static bool_t
+ svc_rpc_gss_validate(struct svc_rpc_gss_client *client, struct rpc_msg *msg,
+     gss_qop_t *qop, rpc_gss_proc_t gcproc)
+@@ -1172,13 +1187,21 @@
+ 
+ 
+ 	/* Reconstruct RPC header for signing (from xdr_callmsg). */
++	/* Start writing XDR-encoded fields into the header buffer */
+ 	buf = rpchdr;
++	/* Transaction ID - unique identifier for this RPC call */
+ 	IXDR_PUT_LONG(buf, msg->rm_xid);
++	/* Direction - always CALL (0) for client-to-server messages */
+ 	IXDR_PUT_ENUM(buf, msg->rm_direction);
++	/* RPC version - should be 2 for ONC RPC */
+ 	IXDR_PUT_LONG(buf, msg->rm_call.cb_rpcvers);
++	/* Program number - identifies the RPC service */
+ 	IXDR_PUT_LONG(buf, msg->rm_call.cb_prog);
++	/* Program version number */
+ 	IXDR_PUT_LONG(buf, msg->rm_call.cb_vers);
++	/* Procedure number - identifies the specific RPC operation */
+ 	IXDR_PUT_LONG(buf, msg->rm_call.cb_proc);
++	/* Credential - the RPCSEC_GSS authentication data */
+ 	oa = &msg->rm_call.cb_cred;
+ 	IXDR_PUT_ENUM(buf, oa->oa_flavor);
+ 	IXDR_PUT_LONG(buf, oa->oa_length);

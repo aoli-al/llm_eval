@@ -1,0 +1,25 @@
+--- sys/rpc/rpcsec_gss/svc_rpcsec_gss.c.orig	2026-04-17 09:36:09.846693691 -0400
++++ sys/rpc/rpcsec_gss/svc_rpcsec_gss.c	2026-04-17 09:37:15.345564348 -0400
+@@ -1155,6 +1155,22 @@
+ 	return (TRUE);
+ }
+ 
++/*
++ * Helper to validate opaque auth credential length.
++ */
++static bool_t
++validate_auth_length(const struct opaque_auth *oa, size_t buffer_remaining)
++{
++	if (oa->oa_length > MAX_AUTH_BYTES) {
++		return (FALSE);
++	}
++	if (RNDUP(oa->oa_length) > buffer_remaining) {
++		return (FALSE);
++	}
++	return (TRUE);
++}
++
++
+ static bool_t
+ svc_rpc_gss_validate(struct svc_rpc_gss_client *client, struct rpc_msg *msg,
+     gss_qop_t *qop, rpc_gss_proc_t gcproc)

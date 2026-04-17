@@ -1,0 +1,19 @@
+[project]
+name = "llm-eval"
+version = "0.1.0"
+description = "LLM evaluation harness for bug-finding in source code"
+requires-python = ">=3.12"
+dependencies = [
+  "pyyaml",
+  "openhands-sdk",
+  "openhands-tools",
+  "boto3>=1.42.90",
+  "botocore[crt]>=1.42.90",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.extra-build-dependencies]
+"func_timeout" = ["setuptools"]

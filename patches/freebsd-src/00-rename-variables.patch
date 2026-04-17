@@ -1,0 +1,57 @@
+--- sys/rpc/rpcsec_gss/svc_rpcsec_gss.c.orig	2026-04-17 09:36:09.846693691 -0400
++++ sys/rpc/rpcsec_gss/svc_rpcsec_gss.c	2026-04-17 09:36:21.923966286 -0400
+@@ -1159,35 +1159,35 @@
+ svc_rpc_gss_validate(struct svc_rpc_gss_client *client, struct rpc_msg *msg,
+     gss_qop_t *qop, rpc_gss_proc_t gcproc)
+ {
+-	struct opaque_auth	*oa;
++	struct opaque_auth	*auth_cred;
+ 	gss_buffer_desc		 rpcbuf, checksum;
+ 	OM_uint32		 maj_stat, min_stat;
+ 	gss_qop_t		 qop_state;
+-	int32_t			 rpchdr[128 / sizeof(int32_t)];
+-	int32_t			*buf;
++	int32_t			 rpc_header_buffer[128 / sizeof(int32_t)];
++	int32_t			*write_ptr;
+ 
+ 	rpc_gss_log_debug("in svc_rpc_gss_validate()");
+ 	
+-	memset(rpchdr, 0, sizeof(rpchdr));
++	memset(rpc_header_buffer, 0, sizeof(rpc_header_buffer));
+ 
+ 
+ 	/* Reconstruct RPC header for signing (from xdr_callmsg). */
+-	buf = rpchdr;
+-	IXDR_PUT_LONG(buf, msg->rm_xid);
+-	IXDR_PUT_ENUM(buf, msg->rm_direction);
+-	IXDR_PUT_LONG(buf, msg->rm_call.cb_rpcvers);
+-	IXDR_PUT_LONG(buf, msg->rm_call.cb_prog);
+-	IXDR_PUT_LONG(buf, msg->rm_call.cb_vers);
+-	IXDR_PUT_LONG(buf, msg->rm_call.cb_proc);
+-	oa = &msg->rm_call.cb_cred;
+-	IXDR_PUT_ENUM(buf, oa->oa_flavor);
+-	IXDR_PUT_LONG(buf, oa->oa_length);
+-	if (oa->oa_length) {
+-		memcpy((caddr_t)buf, oa->oa_base, oa->oa_length);
+-		buf += RNDUP(oa->oa_length) / sizeof(int32_t);
++	write_ptr = rpc_header_buffer;
++	IXDR_PUT_LONG(write_ptr, msg->rm_xid);
++	IXDR_PUT_ENUM(write_ptr, msg->rm_direction);
++	IXDR_PUT_LONG(write_ptr, msg->rm_call.cb_rpcvers);
++	IXDR_PUT_LONG(write_ptr, msg->rm_call.cb_prog);
++	IXDR_PUT_LONG(write_ptr, msg->rm_call.cb_vers);
++	IXDR_PUT_LONG(write_ptr, msg->rm_call.cb_proc);
++	auth_cred = &msg->rm_call.cb_cred;
++	IXDR_PUT_ENUM(write_ptr, auth_cred->oa_flavor);
++	IXDR_PUT_LONG(write_ptr, auth_cred->oa_length);
++	if (auth_cred->oa_length) {
++		memcpy((caddr_t)write_ptr, auth_cred->oa_base, auth_cred->oa_length);
++		write_ptr += RNDUP(auth_cred->oa_length) / sizeof(int32_t);
+ 	}
+-	rpcbuf.value = rpchdr;
+-	rpcbuf.length = (u_char *)buf - (u_char *)rpchdr;
++	rpcbuf.value = rpc_header_buffer;
++	rpcbuf.length = (u_char *)write_ptr - (u_char *)rpc_header_buffer;
+ 
+ 	checksum.value = msg->rm_call.cb_verf.oa_base;
+ 	checksum.length = msg->rm_call.cb_verf.oa_length;

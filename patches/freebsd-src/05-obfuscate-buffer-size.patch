@@ -1,0 +1,27 @@
+--- sys/rpc/rpcsec_gss/svc_rpcsec_gss.c.orig	2026-04-17 09:36:09.846693691 -0400
++++ sys/rpc/rpcsec_gss/svc_rpcsec_gss.c	2026-04-17 09:37:23.468510083 -0400
+@@ -1155,6 +1155,9 @@
+ 	return (TRUE);
+ }
+ 
++#define RPCHDR_SLOTS	32
++#define RPCHDR_SIZE	(RPCHDR_SLOTS * sizeof(int32_t))
++
+ static bool_t
+ svc_rpc_gss_validate(struct svc_rpc_gss_client *client, struct rpc_msg *msg,
+     gss_qop_t *qop, rpc_gss_proc_t gcproc)
+@@ -1163,12 +1166,12 @@
+ 	gss_buffer_desc		 rpcbuf, checksum;
+ 	OM_uint32		 maj_stat, min_stat;
+ 	gss_qop_t		 qop_state;
+-	int32_t			 rpchdr[128 / sizeof(int32_t)];
++	int32_t			 rpchdr[RPCHDR_SLOTS];
+ 	int32_t			*buf;
+ 
+ 	rpc_gss_log_debug("in svc_rpc_gss_validate()");
+ 	
+-	memset(rpchdr, 0, sizeof(rpchdr));
++	memset(rpchdr, 0, RPCHDR_SIZE);
+ 
+ 
+ 	/* Reconstruct RPC header for signing (from xdr_callmsg). */
