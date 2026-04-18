@@ -87,12 +87,19 @@ def run_benchmark(
     benchmark_name: str,
     model_name: str,
     num_trials: int,
+    whole_file: bool = False,
 ) -> dict:
     benchmark = config["benchmarks"][benchmark_name]
-    eval_config = benchmark["evaluation"]
+    eval_config = dict(benchmark["evaluation"])
+    eval_config["whole_file_mode"] = whole_file
     model_defaults = config.get("model_defaults", {})
 
-    template_path = ROOT / benchmark["prompt_template"]
+    template_override = (
+        "prompts/security_audit_file.md"
+        if whole_file
+        else benchmark.get("prompt_template", "prompts/security_audit_function.md")
+    )
+    template_path = ROOT / template_override
     prompt = render_prompt(template_path, {
         "project_name": benchmark["project_name"],
         "target_file": benchmark["target_file"],
@@ -102,7 +109,7 @@ def run_benchmark(
 
     results_base = ROOT / "results" / benchmark_name / model_name
 
-    variants = []
+    variants = [("Origin", None), ]
     for patch_path_str in benchmark.get("patches", []):
         patch_path = ROOT / patch_path_str
         if patch_path.exists():
@@ -189,6 +196,11 @@ def main():
              "'openai/gpt-4o', 'ollama/llama3')",
     )
     parser.add_argument("--trials", type=int, help="Override trials per variant")
+    parser.add_argument(
+        "--whole-file",
+        action="store_true",
+        help="Audit the whole target file and use the file-level prompt template",
+    )
     args = parser.parse_args()
 
     config = load_config(Path(args.config))
@@ -204,7 +216,9 @@ def main():
         print(f"\n{'=' * 60}")
         print(f"Benchmark: {bm}")
         print(f"{'=' * 60}")
-        summary = run_benchmark(config, bm, args.model, num_trials)
+        summary = run_benchmark(
+            config, bm, args.model, num_trials, whole_file=args.whole_file
+        )
         summaries.append(summary)
 
     generate_report(summaries, ROOT / "results")

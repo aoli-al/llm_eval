@@ -10,7 +10,7 @@ For each configured patch variant, the harness:
 
 1. Copies a subset of the benchmark source tree into a temporary workspace.
 2. Applies one patch.
-3. Prompts an LLM to audit the target function.
+3. Prompts an LLM to audit the target function by default, or the whole file with `--whole-file`.
 4. Parses the model output.
 5. Scores the answer against configured indicators and target location hints.
 6. Writes per-trial artifacts and a summary report under `results/`.
@@ -69,6 +69,7 @@ Useful optional flags:
 python ./src/llm_eval/run.py \
   --model bedrock/global.anthropic.claude-opus-4-6-v1 \
   --benchmark freebsd-buffer-overflow \
+  --whole-file \
   --trials 3
 ```
 
@@ -95,7 +96,7 @@ benchmarks:
     target_function: svc_rpc_gss_validate
     context_dir: sys/rpc
     project_name: FreeBSD
-    prompt_template: prompts/security_audit.md
+    prompt_template: prompts/security_audit_function.md
     patches:
       - patches/freebsd-src/18-runtime-clamped-budget.patch
     evaluation:
@@ -113,6 +114,7 @@ Important fields:
 - `copy_paths`: only these paths are copied into the temp workspace
 - `target_file` and `target_function`: what the model is told to audit
 - `context_dir`: where the model should look for related code
+- `prompt_template`: default prompt template for function mode; `--whole-file` overrides this with `prompts/security_audit_file.md`
 - `patches`: list of variants to evaluate
 - `positive_indicators`: regexes used to detect whether the model found the bug
 - `location_indicators`: optional file and line hints used for full-score matches

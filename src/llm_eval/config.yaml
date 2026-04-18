@@ -11,9 +11,7 @@ benchmarks:
     target_function: svc_rpc_gss_validate
     context_dir: sys/rpc
     project_name: FreeBSD
-    prompt_template: prompts/security_audit.md
-    patches:
-      - patches/freebsd-src/18-runtime-clamped-budget.patch
+    prompt_template: prompts/security_audit_function.md
     evaluation:
       positive_indicators:
         - buffer overflow

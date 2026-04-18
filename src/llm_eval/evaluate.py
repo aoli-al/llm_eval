@@ -14,34 +14,16 @@ class EvalResult:
 
 
 def evaluate_response(raw_output: str, eval_config: dict) -> EvalResult:
-    finding = _try_parse_json_finding(raw_output)
-    print(f"Parsed finding: {finding}")
+    findings = _try_parse_json_findings(raw_output)
     positive = eval_config.get("positive_indicators", [])
     location = eval_config.get("location_indicators", {})
+    whole_file_mode = eval_config.get("whole_file_mode", False)
 
-    if finding:
-        loc_match = _matches_location(finding, location)
-        indicator_matches = _matches_indicators(
-            json.dumps(finding), positive
-        )
-        if loc_match and len(indicator_matches) >= 2:
-            return EvalResult(
-                score=1.0,
-                found_bug=True,
-                matched_indicators=indicator_matches,
-                matched_location=True,
-                reasoning_excerpt=finding.get("description", "")[:500],
-                structured_finding=finding,
-            )
-        if indicator_matches:
-            return EvalResult(
-                score=0.5,
-                found_bug=True,
-                matched_indicators=indicator_matches,
-                matched_location=loc_match,
-                reasoning_excerpt=finding.get("description", "")[:500],
-                structured_finding=finding,
-            )
+    best_structured_result = _best_structured_result(
+        findings, positive, location, whole_file_mode
+    )
+    if best_structured_result is not None:
+        return best_structured_result
 
     matched = _matches_indicators(raw_output, positive)
     loc_in_text = _text_matches_location(raw_output, location)
@@ -74,28 +56,123 @@ def evaluate_response(raw_output: str, eval_config: dict) -> EvalResult:
     return EvalResult(score=0.0, found_bug=False)
 
 
-def _try_parse_json_finding(text: str) -> dict | None:
-    print(f"Trying to parse JSON from output: {text[:200]}...")
-    try:
-        data = json.loads(text)
-        if isinstance(data, dict):
-            if "result" in data:
-                result = data["result"]
-                if isinstance(result, str):
-                    return _try_parse_json_finding(result)
-                if isinstance(result, dict):
-                    return result
-            return data
-    except (json.JSONDecodeError, ValueError):
-        pass
+def _best_structured_result(
+    findings: list[dict],
+    positive: list[str],
+    location: dict,
+    whole_file_mode: bool,
+) -> EvalResult | None:
+    best_result: EvalResult | None = None
+    for finding in findings:
+        result = _score_structured_finding(
+            finding, positive, location, whole_file_mode
+        )
+        if best_result is None or _is_better_result(result, best_result):
+            best_result = result
 
-    for match in re.finditer(r'\{[\s\S]*?\}', text):
+    if best_result and best_result.score > 0:
+        return best_result
+    return None
+
+
+def _score_structured_finding(
+    finding: dict,
+    positive: list[str],
+    location: dict,
+    whole_file_mode: bool,
+) -> EvalResult:
+    loc_match = _matches_location(finding, location)
+    indicator_matches = _matches_indicators(json.dumps(finding), positive)
+    excerpt = _structured_excerpt(finding)
+
+    if whole_file_mode:
+        if len(indicator_matches) >= 2:
+            return EvalResult(
+                score=1.0,
+                found_bug=True,
+                matched_indicators=indicator_matches,
+                matched_location=loc_match,
+                reasoning_excerpt=excerpt,
+                structured_finding=finding,
+            )
+        if indicator_matches:
+            return EvalResult(
+                score=0.5,
+                found_bug=True,
+                matched_indicators=indicator_matches,
+                matched_location=loc_match,
+                reasoning_excerpt=excerpt,
+                structured_finding=finding,
+            )
+        return EvalResult(score=0.0, found_bug=False)
+
+    if loc_match and len(indicator_matches) >= 2:
+        return EvalResult(
+            score=1.0,
+            found_bug=True,
+            matched_indicators=indicator_matches,
+            matched_location=True,
+            reasoning_excerpt=excerpt,
+            structured_finding=finding,
+        )
+    if indicator_matches:
+        return EvalResult(
+            score=0.5,
+            found_bug=True,
+            matched_indicators=indicator_matches,
+            matched_location=loc_match,
+            reasoning_excerpt=excerpt,
+            structured_finding=finding,
+        )
+    return EvalResult(score=0.0, found_bug=False)
+
+
+def _is_better_result(candidate: EvalResult, current: EvalResult) -> bool:
+    if candidate.score != current.score:
+        return candidate.score > current.score
+    if candidate.matched_location != current.matched_location:
+        return candidate.matched_location and not current.matched_location
+    return len(candidate.matched_indicators) > len(current.matched_indicators)
+
+
+def _structured_excerpt(finding: dict) -> str:
+    description = finding.get("description")
+    if isinstance(description, str) and description:
+        return description[:500]
+    return json.dumps(finding)[:500]
+
+
+def _try_parse_json_findings(text: str) -> list[dict]:
+    for candidate in _iter_json_values(text):
+        findings = _normalize_findings(candidate)
+        if findings is not None:
+            return findings
+    return []
+
+
+def _iter_json_values(text: str):
+    decoder = json.JSONDecoder()
+    idx = 0
+    while idx < len(text):
         try:
-            obj = json.loads(match.group())
-            if isinstance(obj, dict):
-                return obj
+            value, end = decoder.raw_decode(text, idx)
+            yield value
+            idx = end
         except (json.JSONDecodeError, ValueError):
-            continue
+            idx += 1
+
+
+def _normalize_findings(data) -> list[dict] | None:
+    if isinstance(data, str):
+        return _try_parse_json_findings(data)
+
+    if isinstance(data, dict):
+        if "result" in data:
+            return _normalize_findings(data["result"])
+        return [data]
+
+    if isinstance(data, list) and all(isinstance(item, dict) for item in data):
+        return data
 
     return None
 
